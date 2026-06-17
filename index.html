@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pandaman 🐼</title>
+    <title>Panda 🐼</title>
     
     <!-- Mempercepat koneksi DNS ke server Google Script -->
     <link rel="preconnect" href="https://script.google.com">
@@ -15,6 +15,7 @@
             padding: 0;
             width: 100%;
             height: 100%;
+            height: 100dvh; /* Perbaikan Mobile: Menggunakan Dynamic Viewport Height */
             overflow: hidden; /* Mencegah munculnya scrollbar ganda dari body */
             background: linear-gradient(135deg, #0f2027, #203a43, #2c5364); /* Background modern gelap */
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -154,13 +155,40 @@
             75% { transform: translateX(-5px); }
         }
 
+        /* --- STYLING UNTUK PESAN DIBLOKIR --- */
+        #lockout-msg {
+            display: none;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            padding: 20px;
+            border-radius: 12px;
+            margin-top: 15px;
+            animation: fadeIn 0.5s ease-out;
+        }
+        #lockout-msg h3 {
+            color: #ef4444;
+            margin: 0 0 10px 0;
+            font-size: 18px;
+        }
+        #lockout-timer {
+            font-size: 28px;
+            font-weight: 800;
+            color: #b91c1c;
+            letter-spacing: 2px;
+            font-family: monospace;
+        }
+
         /* --- STYLING UNTUK IFRAME --- */
         /* Iframe awalnya disembunyikan */
         #main-iframe {
             display: none; 
-            width: 100vw;
-            height: 100vh;
+            width: 100%;
+            height: 100%;
+            height: 100dvh; /* Perbaikan Mobile: mencegah footer terpotong oleh address bar */
             border: none;
+            position: absolute; /* Memastikan posisi absolut dan pas layar penuh */
+            top: 0;
+            left: 0;
         }
     </style>
 </head>
@@ -181,6 +209,13 @@
         <button id="verify-btn">Verifikasi Akses</button>
         
         <div id="error-msg">Jawaban salah! Silakan coba lagi.</div>
+
+        <!-- Pesan Blokir -->
+        <div id="lockout-msg">
+            <h3>Akses Diblokir 🚫</h3>
+            <p>Terlalu banyak percobaan salah. Coba lagi dalam:</p>
+            <div id="lockout-timer">10:00</div>
+        </div>
     </div>
 
     <!-- Iframe utama (URL tidak diatur di awal untuk mencegah pemuatan data di belakang layar) -->
@@ -189,6 +224,87 @@
     <script>
         let expectedAnswer = 0;
         let isVerified = false;
+
+        // --- KONFIGURASI LIMIT AKSES ---
+        const MAX_ATTEMPTS = 3;
+        const LOCKOUT_MINUTES = 10;
+        let lockoutInterval;
+
+        // Fungsi Helper Cookies (Agar status blokir tidak hilang saat di-refresh)
+        function getCookie(name) {
+            const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+            if (match) return match[2];
+            return null;
+        }
+
+        function setCookie(name, value, minutes) {
+            const date = new Date();
+            date.setTime(date.getTime() + (minutes * 60 * 1000));
+            document.cookie = `${name}=${value}; expires=${date.toUTCString()}; path=/`;
+        }
+
+        function deleteCookie(name) {
+            document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+        }
+
+        // Cek status blokir saat halaman baru dimuat
+        function checkLockout() {
+            const blockedUntil = getCookie('panda_blocked_until');
+            if (blockedUntil) {
+                const endTime = parseInt(blockedUntil, 10);
+                if (Date.now() < endTime) {
+                    activateLockoutMode(endTime);
+                    return true;
+                } else {
+                    // Waktu blokir sudah habis
+                    deleteCookie('panda_blocked_until');
+                    deleteCookie('panda_attempts');
+                }
+            }
+            return false;
+        }
+
+        // Aktifkan mode blokir (Sembunyikan form, tampilkan timer)
+        function activateLockoutMode(endTime) {
+            document.getElementById('captcha-question').style.display = 'none';
+            document.getElementById('captcha-input').style.display = 'none';
+            document.getElementById('verify-btn').style.display = 'none';
+            document.getElementById('error-msg').style.display = 'none';
+            
+            const lockoutMsg = document.getElementById('lockout-msg');
+            lockoutMsg.style.display = 'block';
+
+            updateLockoutTimer(endTime);
+            clearInterval(lockoutInterval);
+            lockoutInterval = setInterval(() => {
+                updateLockoutTimer(endTime);
+            }, 1000);
+        }
+
+        // Update teks countdown timer
+        function updateLockoutTimer(endTime) {
+            const now = Date.now();
+            const timeLeft = endTime - now;
+
+            if (timeLeft <= 0) {
+                clearInterval(lockoutInterval);
+                deleteCookie('panda_blocked_until');
+                deleteCookie('panda_attempts');
+                
+                // Kembalikan UI seperti semula jika waktu habis
+                document.getElementById('captcha-question').style.display = 'block';
+                document.getElementById('captcha-input').style.display = 'block';
+                document.getElementById('verify-btn').style.display = 'block';
+                document.getElementById('lockout-msg').style.display = 'none';
+                
+                generateCaptcha();
+            } else {
+                const minutes = Math.floor(timeLeft / (1000 * 60));
+                const seconds = Math.floor((timeLeft % (1000 * 60)) / 1000);
+                document.getElementById('lockout-timer').innerText = 
+                    `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+        }
 
         // --- ANIMASI LATAR BELAKANG (ANGKA BERGERAK) ---
         const canvas = document.getElementById('bg-canvas');
@@ -293,7 +409,9 @@
             }
 
             if (parseInt(userInput, 10) === expectedAnswer) {
-                // Berhasil verifikasi: Hentikan animasi angka & sembunyikan kotak
+                // Berhasil verifikasi: Hapus history kegagalan
+                deleteCookie('panda_attempts');
+                
                 isVerified = true;
                 container.style.display = 'none';
                 errorMsg.style.display = 'none';
@@ -306,11 +424,24 @@
                 iframe.style.display = 'block';
                 iframe.src = "https://script.google.com/macros/s/AKfycbwGtIduYFjEdk3aIcCyr5huKRv9IZx3wxKMTbN_Ts9-5L5D76T4UO1IHlIgENEL9nEljQ/exec";
             } else {
-                // Jawaban salah: Tampilkan error, putar animasi bergetar, dan muat soal baru
-                errorMsg.innerText = "Jawaban salah! Silakan coba lagi.";
-                errorMsg.style.display = 'block';
-                triggerShake(container);
-                generateCaptcha();
+                // Gagal: Logika Limit Akses
+                let attempts = parseInt(getCookie('panda_attempts') || '0', 10);
+                attempts++;
+                setCookie('panda_attempts', attempts, LOCKOUT_MINUTES); // Simpan percobaan
+
+                if (attempts >= MAX_ATTEMPTS) {
+                    // Jika batas tercapai, blokir selama 10 menit
+                    const endTime = Date.now() + (LOCKOUT_MINUTES * 60 * 1000);
+                    setCookie('panda_blocked_until', endTime, LOCKOUT_MINUTES);
+                    activateLockoutMode(endTime);
+                } else {
+                    // Jawaban salah tapi batas belum tercapai: Tampilkan sisa percobaan
+                    const sisa = MAX_ATTEMPTS - attempts;
+                    errorMsg.innerText = `Jawaban salah! Sisa percobaan: ${sisa}`;
+                    errorMsg.style.display = 'block';
+                    triggerShake(container);
+                    generateCaptcha();
+                }
             }
         }
 
@@ -325,7 +456,10 @@
         window.onload = () => {
             initCanvas();
             animateCanvas();
-            generateCaptcha();
+            // Cek status blokir dulu, jika aman baru buat soal matematika
+            if (!checkLockout()) {
+                generateCaptcha();
+            }
         };
 
         // Event listener klik tombol verifikasi
